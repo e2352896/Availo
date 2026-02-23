@@ -1,31 +1,60 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-
-// ✅ Pour l’instant: stats basées sur un mock (on remplacera par Firestore plus tard)
-const MOCK_BOOKS = [
-  { isbn: "9780131103627", title: "C Programming Language", course: "420-6D1", stock: 3, price: 79.99 },
-  { isbn: "9780132350884", title: "Clean Code", course: "420-PA1", stock: 0, price: 69.99 },
-  { isbn: "9780262033848", title: "Introduction to Algorithms", course: "420-6D9", stock: 1, price: 99.99 },
-  { isbn: "9781491950296", title: "Designing Data-Intensive Applications", course: "420-BD1", stock: 7, price: 89.99 },
-  { isbn: "9780134685991", title: "Effective Java", course: "420-JV1", stock: 2, price: 84.99 },
-  { isbn: "9780201633610", title: "Design Patterns", course: "420-OO1", stock: 4, price: 74.99 },
-];
+import * as XLSX from "xlsx";
 
 function computeStatus(stock) {
-  if (stock <= 0) return "rupture";
-  if (stock <= 2) return "low";
+  const n = Number(stock);
+  if (!Number.isFinite(n)) return "unknown";
+  if (n <= 0) return "rupture";
+  if (n <= 2) return "low";
   return "ok";
 }
 
-function formatDateTime(date) {
-  try {
-    return new Intl.DateTimeFormat("fr-CA", {
-      dateStyle: "medium",
-      timeStyle: "short",
-    }).format(date);
-  } catch {
-    return date.toISOString();
+function pickColumn(row, candidates) {
+  // row keys can vary based on Excel headers
+  const keys = Object.keys(row || {});
+  for (const c of candidates) {
+    const found = keys.find((k) => k.trim().toLowerCase() === c);
+    if (found) return row[found];
   }
+  return undefined;
+}
+
+function normalizeBooks(rows) {
+  // Accept flexible header names
+  const out = [];
+  for (const r of rows) {
+    const isbn = String(
+      pickColumn(r, ["isbn", "codeisbn", "isbn13", "ean", "barcode"]) ?? ""
+    ).trim();
+
+    const title = String(
+      pickColumn(r, ["title", "titre", "nom", "produit", "description"]) ?? ""
+    ).trim();
+
+    const course = String(
+      pickColumn(r, ["course", "cours", "code cours", "code_cours"]) ?? ""
+    ).trim();
+
+    const stockRaw = pickColumn(r, ["stock", "qty", "quantite", "quantité", "qte", "inventaire"]);
+    const stock = stockRaw === "" || stockRaw == null ? 0 : Number(stockRaw);
+
+    const priceRaw = pickColumn(r, ["price", "prix", "montant"]);
+    const price = priceRaw === "" || priceRaw == null ? null : Number(priceRaw);
+
+    // Keep rows that look like real items (at least title or isbn)
+    if (!isbn && !title) continue;
+
+    out.push({
+      isbn: isbn || "(sans ISBN)",
+      title: title || "(sans titre)",
+      course: course || "",
+      stock: Number.isFinite(stock) ? stock : 0,
+      price: Number.isFinite(price) ? price : null,
+      _status: computeStatus(stock),
+    });
+  }
+  return out;
 }
 
 function StatCard({ label, value, hint, tone = "default" }) {
@@ -39,25 +68,41 @@ function StatCard({ label, value, hint, tone = "default" }) {
 }
 
 export default function AdminPage() {
-  const stats = useMemo(() => {
-    const total = MOCK_BOOKS.length;
+  const [importError, setImportError] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [fileName, setFileName] = useState("");
+  const [books, setBooks] = useState(() => {
+    // Load local cache if present
+    try {
+      const raw = localStorage.getItem("availo_inventory_books");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(() => {
+    try {
+      const raw = localStorage.getItem("availo_inventory_lastUpdatedAt");
+      return raw ? new Date(raw) : null;
+    } catch {
+      return null;
+    }
+  });
 
-    let available = 0;
-    let lowStock = 0;
-    let outOfStock = 0;
-    let totalUnits = 0;
+  const stats = useMemo(() => {
+    const total = books.length;
+    let available = 0, lowStock = 0, outOfStock = 0, totalUnits = 0;
 
     const byCourse = new Map();
 
-    for (const b of MOCK_BOOKS) {
-      const s = computeStatus(b.stock);
+    for (const b of books) {
       totalUnits += Math.max(0, b.stock || 0);
 
-      if (s === "ok") available += 1;
-      if (s === "low") lowStock += 1;
-      if (s === "rupture") outOfStock += 1;
+      if (b._status === "ok") available++;
+      else if (b._status === "low") lowStock++;
+      else if (b._status === "rupture") outOfStock++;
 
-      const key = b.course || "Autre";
+      const key = b.course?.trim() || "Autre";
       byCourse.set(key, (byCourse.get(key) || 0) + 1);
     }
 
@@ -66,39 +111,71 @@ export default function AdminPage() {
       .slice(0, 5)
       .map(([course, count]) => ({ course, count }));
 
-    // “Dernière MAJ” : en mock -> maintenant. Plus tard: meta.lastUpdatedAt depuis Firestore
-    const lastUpdatedAt = new Date();
+    return { total, available, lowStock, outOfStock, totalUnits, topCourses };
+  }, [books]);
 
-    // Bonus: “Top recherches” si tu stockes les recherches dans localStorage (optionnel)
-    let topSearches = [];
+  async function handleFile(file) {
+    setImportError("");
+    setImporting(true);
+
     try {
-      const raw = localStorage.getItem("availo_search_terms");
-      const terms = raw ? JSON.parse(raw) : [];
-      const freq = new Map();
-      for (const t of terms) {
-        const k = String(t || "").trim().toLowerCase();
-        if (!k) continue;
-        freq.set(k, (freq.get(k) || 0) + 1);
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+
+      const sheetName = wb.SheetNames?.[0];
+      if (!sheetName) throw new Error("Aucune feuille trouvée dans le fichier Excel.");
+
+      const ws = wb.Sheets[sheetName];
+
+      // Convert to JSON rows
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+
+      if (!rows.length) throw new Error("Le fichier Excel est vide (aucune ligne détectée).");
+
+      const normalized = normalizeBooks(rows);
+
+      if (!normalized.length) {
+        throw new Error("Aucune ligne exploitable (vérifie les colonnes: ISBN/Titre/Stock).");
       }
-      topSearches = [...freq.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5)
-        .map(([term, count]) => ({ term, count }));
-    } catch {
-      topSearches = [];
+
+      setBooks(normalized);
+      setFileName(file.name);
+
+      const now = new Date();
+      setLastUpdatedAt(now);
+
+      // Save locally for now (no Firebase)
+      localStorage.setItem("availo_inventory_books", JSON.stringify(normalized));
+      localStorage.setItem("availo_inventory_lastUpdatedAt", now.toISOString());
+    } catch (e) {
+      setImportError(e?.message || "Erreur lors de l’import.");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  function onChooseFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const ok = file.name.toLowerCase().endsWith(".xlsx") || file.name.toLowerCase().endsWith(".xls");
+    if (!ok) {
+      setImportError("Format non supporté. Choisis un fichier .xlsx ou .xls");
+      return;
     }
 
-    return {
-      total,
-      available,
-      lowStock,
-      outOfStock,
-      totalUnits,
-      lastUpdatedAt,
-      topCourses,
-      topSearches,
-    };
-  }, []);
+    handleFile(file);
+    e.target.value = ""; // reset input (allow re-upload same file)
+  }
+
+  function clearLocalData() {
+    localStorage.removeItem("availo_inventory_books");
+    localStorage.removeItem("availo_inventory_lastUpdatedAt");
+    setBooks([]);
+    setLastUpdatedAt(null);
+    setFileName("");
+    setImportError("");
+  }
 
   return (
     <div className="page">
@@ -107,37 +184,71 @@ export default function AdminPage() {
           <Link to="/" className="adminBackLink">← Retour</Link>
           <div className="adminTitleWrap">
             <div className="adminTitle">Admin</div>
-            <div className="adminSubtitle">Dashboard</div>
+            <div className="adminSubtitle">Import Excel + Dashboard</div>
           </div>
-          <div className="adminPill">Lecture seule (mock)</div>
+          <div className="adminPill">Local (sans Firebase)</div>
         </div>
       </header>
 
       <main className="content">
         <section className="dashHeader">
           <div>
-            <h1 className="dashH1">Vue d’ensemble</h1>
+            <h1 className="dashH1">Inventaire</h1>
             <p className="dashP">
-              Statistiques basées sur les données actuelles. (On branchera Firestore après l’import Excel.)
+              Importer un fichier Excel pour mettre à jour l’inventaire (mode local).
             </p>
           </div>
+
           <div className="dashMeta">
             <div className="dashMetaLabel">Dernière mise à jour</div>
-            <div className="dashMetaValue">{formatDateTime(stats.lastUpdatedAt)}</div>
+            <div className="dashMetaValue">
+              {lastUpdatedAt ? new Intl.DateTimeFormat("fr-CA", { dateStyle: "medium", timeStyle: "short" }).format(lastUpdatedAt) : "—"}
+            </div>
+          </div>
+        </section>
+
+        <section className="dashPanel" style={{ marginBottom: 12 }}>
+          <div className="dashPanelTitle">Importer un fichier Excel (.xlsx)</div>
+          <div className="dashPanelBody">
+            <div className="importRow">
+              <label className="actionBtn fileBtn">
+                {importing ? "Import en cours…" : "Choisir un fichier"}
+                <input type="file" accept=".xlsx,.xls" onChange={onChooseFile} hidden />
+              </label>
+
+              <div className="importMeta">
+                <div className="importFile">
+                  {fileName ? `Fichier: ${fileName}` : "Aucun fichier importé"}
+                </div>
+                {books.length ? (
+                  <div className="importSmall">{books.length} lignes chargées</div>
+                ) : (
+                  <div className="importSmall">Import local : les données sont stockées dans ton navigateur</div>
+                )}
+              </div>
+
+              <button className="actionBtn" onClick={clearLocalData} disabled={!books.length || importing}>
+                Vider
+              </button>
+            </div>
+
+            {importError ? (
+              <div className="notificationErr">{importError}</div>
+            ) : null}
           </div>
         </section>
 
         <section className="dashGrid">
-          <StatCard label="Livres" value={stats.total} hint="Nombre total de livres" />
+          <StatCard label="Livres" value={stats.total} hint="Nombre total de lignes importées" />
           <StatCard label="Disponibles" value={stats.available} hint="Stock > 2" tone="ok" />
           <StatCard label="Stock faible" value={stats.lowStock} hint="Stock 1–2" tone="warn" />
           <StatCard label="Ruptures" value={stats.outOfStock} hint="Stock = 0" tone="danger" />
           <StatCard label="Unités en stock" value={stats.totalUnits} hint="Somme des quantités" />
         </section>
 
-        <section className="dashTwoCol">
+        <section className="dashTwoCol" style={{ marginTop: 12 }}>
           <div className="dashPanel">
-            <div className="dashPanelTitle">Top cours (par nombre de livres)</div>
+            <div className="dashPanelTitle">Top cours</div>
             <div className="dashPanelBody">
               {stats.topCourses.length ? (
                 <ul className="dashList">
@@ -155,48 +266,34 @@ export default function AdminPage() {
           </div>
 
           <div className="dashPanel">
-            <div className="dashPanelTitle">Top recherches (optionnel)</div>
+            <div className="dashPanelTitle">Aperçu (20 premières lignes)</div>
             <div className="dashPanelBody">
-              {stats.topSearches.length ? (
-                <ul className="dashList">
-                  {stats.topSearches.map((s) => (
-                    <li key={s.term} className="dashListItem">
-                      <span className="dashListLeft">{s.term}</span>
-                      <span className="dashListRight">{s.count}</span>
-                    </li>
-                  ))}
-                </ul>
+              {!books.length ? (
+                <div className="empty">Importe un fichier pour voir l’aperçu.</div>
               ) : (
-                <div className="empty">
-                  Rien encore. (Si tu veux, je te montre comment logger les recherches depuis HomePage.)
+                <div className="tableWrap">
+                  <table className="miniTable">
+                    <thead>
+                      <tr>
+                        <th>Titre</th>
+                        <th>ISBN</th>
+                        <th>Cours</th>
+                        <th>Stock</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {books.slice(0, 20).map((b, idx) => (
+                        <tr key={b.isbn + idx}>
+                          <td title={b.title}>{b.title}</td>
+                          <td>{b.isbn}</td>
+                          <td>{b.course || "—"}</td>
+                          <td>{b.stock}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
-            </div>
-          </div>
-        </section>
-
-        <section className="dashActions">
-          <div className="dashPanel">
-            <div className="dashPanelTitle">Prochaines actions</div>
-            <div className="dashPanelBody">
-              <div className="actionRow">
-                <div>
-                  <div className="actionTitle">Importer un fichier Excel</div>
-                  <div className="actionHint">Mettre à jour l’inventaire depuis la COOP</div>
-                </div>
-                <button className="actionBtn" disabled>
-                  Bientôt
-                </button>
-              </div>
-              <div className="actionRow">
-                <div>
-                  <div className="actionTitle">Gérer les alertes</div>
-                  <div className="actionHint">Voir qui attend quels livres</div>
-                </div>
-                <button className="actionBtn" disabled>
-                  Bientôt
-                </button>
-              </div>
             </div>
           </div>
         </section>

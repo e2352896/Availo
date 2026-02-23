@@ -427,3 +427,77 @@ html, body {
   color: var(--text);
 }
 .actionBtn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.importRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.fileBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.importMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 240px;
+}
+
+.importFile {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.importSmall {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.notificationErr {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 90, 90, 0.25);
+  background: rgba(255, 90, 90, 0.10);
+  color: rgba(255,255,255,0.90);
+}
+
+.tableWrap {
+  overflow: auto;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+}
+
+.miniTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.miniTable th, .miniTable td {
+  padding: 10px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.miniTable th {
+  color: var(--muted);
+  font-weight: 700;
+  background: rgba(255,255,255,0.04);
+}
+
+.miniTable td {
+  color: rgba(255,255,255,0.88);
+}
+
+.miniTable tr:last-child td {
+  border-bottom: none;
+}
