@@ -20,7 +20,6 @@ function toNumber(v, fallback = 0) {
 }
 
 function normalizeRows(rows) {
-  // adapte aux headers possibles dans Excel (FR/EN)
   return rows
     .map((r) => {
       const isbn = String(pick(r, ["isbn", "ean", "barcode", "isbn13"]) ?? "").trim();
@@ -33,12 +32,11 @@ function normalizeRows(rows) {
       const prixRaw = pick(r, ["prix", "price", "montant"]);
       const prix = prixRaw === "" || prixRaw == null ? null : toNumber(prixRaw, null);
 
-      if (!isbn || !titre) return null; // on skip si pas assez d'infos
+      if (!isbn || !titre) return null;
       return { isbn, titre, cours, stock, prix };
     })
     .filter(Boolean);
 }
-
 
 function computeStatus(stock) {
   const n = Number(stock ?? 0);
@@ -74,7 +72,7 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
-    const [importing, setImporting] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState("");
 
   async function handleExcelUpload(file) {
@@ -141,7 +139,6 @@ export default function AdminPage() {
     e.target.value = "";
   }
 
-  // ✅ Firestore live
   useEffect(() => {
     setLoading(true);
     setErr("");
@@ -169,7 +166,7 @@ export default function AdminPage() {
         });
 
         setBooks(rows);
-        setLastUpdatedAt(new Date()); // “dernière synchro UI” (temps réel)
+        setLastUpdatedAt(new Date());
         setLoading(false);
       },
       (e) => {
@@ -222,7 +219,10 @@ export default function AdminPage() {
             <div className="adminSubtitle">Dashboard (Firestore)</div>
           </div>
 
-          <div className="adminPill">Live</div>
+          {/* ✅ MODIFICATION ICI */}
+          <Link to="/admin/gestion" className="adminPill" style={{ textDecoration: "none" }}>
+            Gestion
+          </Link>
         </div>
       </header>
 
@@ -241,9 +241,7 @@ export default function AdminPage() {
           </div>
         </section>
 
-        {err ? (
-          <div className="notificationErr">{err}</div>
-        ) : null}
+        {err ? <div className="notificationErr">{err}</div> : null}
 
         <section className="dashGrid">
           <StatCard label="Livres" value={loading ? "—" : stats.total} hint="Nombre total" />
@@ -306,6 +304,7 @@ export default function AdminPage() {
             </div>
           </div>
         </section>
+
         <div className="dashPanel" style={{ marginBottom: 12 }}>
           <div className="dashPanelTitle">Import Excel → Firestore</div>
           <div className="dashPanelBody">
@@ -314,7 +313,11 @@ export default function AdminPage() {
               <input type="file" accept=".xlsx,.xls" onChange={onChooseExcel} hidden />
             </label>
 
-            {importMsg ? <div style={{ marginTop: 12 }} className="importStatus">{importMsg}</div> : null}
+            {importMsg ? (
+              <div style={{ marginTop: 12 }} className="importStatus">
+                {importMsg}
+              </div>
+            ) : null}
           </div>
         </div>
       </main>
