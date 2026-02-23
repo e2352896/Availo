@@ -23,17 +23,15 @@ export default function HomePage() {
   const [page, setPage] = useState(1);
 
   const [booksRaw, setBooksRaw] = useState([]);
-  const [loadingBooks, setLoadingBooks] = useState(true);
+  const [loadingBooks, setLoadingBooks] = useState(true);   // start in loading
   const [booksError, setBooksError] = useState("");
 
   const q = query.trim();
   const hasQuery = q.length > 0;
 
+
   // ✅ Temps réel (import Excel → update direct)
   useEffect(() => {
-    setLoadingBooks(true);
-    setBooksError("");
-
     const unsub = onSnapshot(
       collection(db, "livres"),
       (snap) => {
@@ -58,21 +56,22 @@ export default function HomePage() {
         });
 
         setBooksRaw(rows);
-        setLoadingBooks(false);
+        setLoadingBooks(false);   // data arrived
+        setBooksError("");        // clear any previous error
       },
       (err) => {
-        console.error(err);
-        setBooksError("Impossible de charger les livres depuis Firestore.");
+        setBooksError(err.message);
         setLoadingBooks(false);
       }
     );
 
-    return () => unsub();
-  }, []);
+    return unsub; // unsubscribe on unmount
+  }, []); // or include dependencies if you re‑run the query
 
   // reset page quand query/sort change
   useEffect(() => {
-    setPage(1);
+    // schedule the reset after the current render
+    Promise.resolve().then(() => setPage(1));
   }, [q, sortKey]);
 
   const allWithStatus = useMemo(() => {
@@ -155,25 +154,18 @@ export default function HomePage() {
 
       <main className="content">
         {/* ✅ Hero en haut, et en scrollant il disparaît naturellement */}
-        <section className="hero">
-          <div className="hero-inner">
-            <h1 className="hero-title">Availo</h1>
-            <p className="hero-subtitle">Vérifiez la disponibilité des livres de la COOP</p>
-
-            {loadingBooks && (
-              <p className="hero-subtitle" style={{ marginTop: 12 }}>
-                Chargement de l’inventaire…
+        {!hasQuery && (
+          <section className="hero">
+            <div className="hero-inner">
+              <h1 className="hero-title">Availo</h1>
+              <p className="hero-subtitle">
+                Vérifiez la disponibilité des livres de la COOP
               </p>
-            )}
-            {booksError && (
-              <p className="hero-subtitle" style={{ marginTop: 12 }}>
-                {booksError}
-              </p>
-            )}
 
 
-          </div>
-        </section>
+            </div>
+          </section>
+        )}
 
         {/* ✅ Liste de TOUS les livres (ou filtrés si query) */}
         <section className="results">
