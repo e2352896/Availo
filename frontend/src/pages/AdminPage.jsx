@@ -1,6 +1,9 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useMemo, useState, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { auth, db } from "../firebase/firebase";
+import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 
 function computeStatus(stock) {
   const n = Number(stock);
@@ -11,7 +14,6 @@ function computeStatus(stock) {
 }
 
 function pickColumn(row, candidates) {
-  // row keys can vary based on Excel headers
   const keys = Object.keys(row || {});
   for (const c of candidates) {
     const found = keys.find((k) => k.trim().toLowerCase() === c);
@@ -21,7 +23,6 @@ function pickColumn(row, candidates) {
 }
 
 function normalizeBooks(rows) {
-  // Accept flexible header names
   const out = [];
   for (const r of rows) {
     const isbn = String(
@@ -36,13 +37,19 @@ function normalizeBooks(rows) {
       pickColumn(r, ["course", "cours", "code cours", "code_cours"]) ?? ""
     ).trim();
 
-    const stockRaw = pickColumn(r, ["stock", "qty", "quantite", "quantité", "qte", "inventaire"]);
+    const stockRaw = pickColumn(r, [
+      "stock",
+      "qty",
+      "quantite",
+      "quantité",
+      "qte",
+      "inventaire",
+    ]);
     const stock = stockRaw === "" || stockRaw == null ? 0 : Number(stockRaw);
 
     const priceRaw = pickColumn(r, ["price", "prix", "montant"]);
     const price = priceRaw === "" || priceRaw == null ? null : Number(priceRaw);
 
-    // Keep rows that look like real items (at least title or isbn)
     if (!isbn && !title) continue;
 
     out.push({
@@ -68,11 +75,14 @@ function StatCard({ label, value, hint, tone = "default" }) {
 }
 
 export default function AdminPage() {
+  const navigate = useNavigate();
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
   const [importError, setImportError] = useState("");
   const [importing, setImporting] = useState(false);
   const [fileName, setFileName] = useState("");
   const [books, setBooks] = useState(() => {
-    // Load local cache if present
     try {
       const raw = localStorage.getItem("availo_inventory_books");
       return raw ? JSON.parse(raw) : [];
@@ -80,6 +90,7 @@ export default function AdminPage() {
       return [];
     }
   });
+
   const [lastUpdatedAt, setLastUpdatedAt] = useState(() => {
     try {
       const raw = localStorage.getItem("availo_inventory_lastUpdatedAt");
@@ -89,9 +100,31 @@ export default function AdminPage() {
     }
   });
 
+  // 🔐 Vérification connexion Firebase
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        navigate("/admin/login");
+      } else {
+        setCurrentUser(user);
+      }
+      setAuthChecked(true);
+    });
+
+    return () => unsubscribe();
+  }, [navigate]);
+
+  const handleLogout = async () => {
+    await signOut(auth);
+    navigate("/admin/login");
+  };
+
   const stats = useMemo(() => {
     const total = books.length;
-    let available = 0, lowStock = 0, outOfStock = 0, totalUnits = 0;
+    let available = 0,
+      lowStock = 0,
+      outOfStock = 0,
+      totalUnits = 0;
 
     const byCourse = new Map();
 
@@ -114,6 +147,7 @@ export default function AdminPage() {
     return { total, available, lowStock, outOfStock, totalUnits, topCourses };
   }, [books]);
 
+  // ------------------ IMPORT EXCEL ------------------
   async function handleFile(file) {
     setImportError("");
     setImporting(true);
@@ -126,8 +160,6 @@ export default function AdminPage() {
       if (!sheetName) throw new Error("Aucune feuille trouvée dans le fichier Excel.");
 
       const ws = wb.Sheets[sheetName];
-
-      // Convert to JSON rows
       const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
 
       if (!rows.length) throw new Error("Le fichier Excel est vide (aucune ligne détectée).");
@@ -144,9 +176,21 @@ export default function AdminPage() {
       const now = new Date();
       setLastUpdatedAt(now);
 
-      // Save locally for now (no Firebase)
+      // 🔹 Enregistrement local (preview)
       localStorage.setItem("availo_inventory_books", JSON.stringify(normalized));
       localStorage.setItem("availo_inventory_lastUpdatedAt", now.toISOString());
+
+      // 🔹 Envoi vers Firebase
+      for (let book of normalized) {
+        await addDoc(collection(db, "livres"), {
+          titre: book.title,
+          isbn: book.isbn,
+          course: book.course,
+          stock: book.stock,
+          price: book.price ?? null,
+          createdAt: serverTimestamp(),
+        });
+      }
     } catch (e) {
       setImportError(e?.message || "Erreur lors de l’import.");
     } finally {
@@ -158,14 +202,16 @@ export default function AdminPage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const ok = file.name.toLowerCase().endsWith(".xlsx") || file.name.toLowerCase().endsWith(".xls");
+    const ok =
+      file.name.toLowerCase().endsWith(".xlsx") ||
+      file.name.toLowerCase().endsWith(".xls");
     if (!ok) {
       setImportError("Format non supporté. Choisis un fichier .xlsx ou .xls");
       return;
     }
 
     handleFile(file);
-    e.target.value = ""; // reset input (allow re-upload same file)
+    e.target.value = "";
   }
 
   function clearLocalData() {
@@ -176,6 +222,9 @@ export default function AdminPage() {
     setFileName("");
     setImportError("");
   }
+  // ------------------ FIN IMPORT ------------------
+
+  if (!authChecked) return null;
 
   return (
     <div className="page">
@@ -186,7 +235,15 @@ export default function AdminPage() {
             <div className="adminTitle">Admin</div>
             <div className="adminSubtitle">Import Excel + Dashboard</div>
           </div>
-          <div className="adminPill">Local (sans Firebase)</div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            {currentUser && (
+              <span style={{ fontSize: "0.9rem", opacity: 0.7 }}>{currentUser.email}</span>
+            )}
+            <button className="actionBtn" onClick={handleLogout}>
+              Déconnexion
+            </button>
+          </div>
         </div>
       </header>
 
@@ -195,14 +252,19 @@ export default function AdminPage() {
           <div>
             <h1 className="dashH1">Inventaire</h1>
             <p className="dashP">
-              Importer un fichier Excel pour mettre à jour l’inventaire (mode local).
+              Importer un fichier Excel pour mettre à jour l’inventaire (mode local + Firebase).
             </p>
           </div>
 
           <div className="dashMeta">
             <div className="dashMetaLabel">Dernière mise à jour</div>
             <div className="dashMetaValue">
-              {lastUpdatedAt ? new Intl.DateTimeFormat("fr-CA", { dateStyle: "medium", timeStyle: "short" }).format(lastUpdatedAt) : "—"}
+              {lastUpdatedAt
+                ? new Intl.DateTimeFormat("fr-CA", {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  }).format(lastUpdatedAt)
+                : "—"}
             </div>
           </div>
         </section>
@@ -217,24 +279,26 @@ export default function AdminPage() {
               </label>
 
               <div className="importMeta">
-                <div className="importFile">
-                  {fileName ? `Fichier: ${fileName}` : "Aucun fichier importé"}
-                </div>
+                <div className="importFile">{fileName ? `Fichier: ${fileName}` : "Aucun fichier importé"}</div>
                 {books.length ? (
                   <div className="importSmall">{books.length} lignes chargées</div>
                 ) : (
-                  <div className="importSmall">Import local : les données sont stockées dans ton navigateur</div>
+                  <div className="importSmall">
+                    Import local : les données sont stockées dans ton navigateur
+                  </div>
                 )}
               </div>
 
-              <button className="actionBtn" onClick={clearLocalData} disabled={!books.length || importing}>
+              <button
+                className="actionBtn"
+                onClick={clearLocalData}
+                disabled={!books.length || importing}
+              >
                 Vider
               </button>
             </div>
 
-            {importError ? (
-              <div className="notificationErr">{importError}</div>
-            ) : null}
+            {importError && <div className="notificationErr">{importError}</div>}
           </div>
         </section>
 
