@@ -132,13 +132,13 @@ html, body {
 }
 
 .bookCard {
+  background: #1e1e1e;
+  border-radius: 14px;
+  padding: 18px;
   display: flex;
-  gap: 12px;
-  padding: 12px;
-  border-radius: 18px;
-  border: 1px solid var(--stroke);
-  background: var(--panel);
-  transition: transform 140ms ease, background 140ms ease, border-color 140ms ease;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
 }
 
 .bookCard:hover {
@@ -185,13 +185,14 @@ html, body {
 }
 
 .bookTitle {
-  font-weight: 650;
-  font-size: 14px;
-  line-height: 1.2;
-  overflow: hidden;
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 2;  /* max 2 lignes */
   -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .meta {
@@ -631,4 +632,29 @@ html, body {
   margin-top: 12px;
   color: var(--muted);
   font-size: 12px;
+}
+
+@media (max-width: 1100px) {
+  .books-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 800px) {
+  .books-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 500px) {
+  .books-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.books-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+  align-items: stretch;
 }
