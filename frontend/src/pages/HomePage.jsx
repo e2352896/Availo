@@ -2,16 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import SearchBar from "../components/SearchBar.jsx";
 import BookList from "../components/BookList.jsx";
 
-const PAGE_SIZE = 12;
+import { collection, onSnapshot } from "firebase/firestore";
+import { db } from "../firebase/firebase.js";
 
-const MOCK_BOOKS = [
-  { isbn: "9780131103627", title: "C Programming Language", course: "420-6D1", stock: 3, price: 79.99 },
-  { isbn: "9780132350884", title: "Clean Code", course: "420-PA1", stock: 0, price: 69.99 },
-  { isbn: "9780262033848", title: "Introduction to Algorithms", course: "420-6D9", stock: 1, price: 99.99 },
-  { isbn: "9781491950296", title: "Designing Data-Intensive Applications", course: "420-BD1", stock: 7, price: 89.99 },
-  { isbn: "9780134685991", title: "Effective Java", course: "420-JV1", stock: 2, price: 84.99 },
-  { isbn: "9780201633610", title: "Design Patterns", course: "420-OO1", stock: 4, price: 74.99 },
-];
+const PAGE_SIZE = 12;
 
 function computeStatus(stock) {
   if (stock <= 0) return { label: "Rupture", tag: "pill-danger", rank: 3 };
@@ -25,11 +19,59 @@ function normalize(str) {
 
 export default function HomePage() {
   const [query, setQuery] = useState("");
-  const [sortKey, setSortKey] = useState("relevance"); // relevance | title_asc | stock_desc | availability
+  const [sortKey, setSortKey] = useState("relevance");
   const [page, setPage] = useState(1);
+
+  const [booksRaw, setBooksRaw] = useState([]);
+  const [loadingBooks, setLoadingBooks] = useState(true);
+  const [booksError, setBooksError] = useState("");
 
   const q = query.trim();
   const isSearching = q.length > 0;
+
+  // ✅ Temps réel (tu ré-importes Excel → ça se met à jour direct)
+  useEffect(() => {
+    setLoadingBooks(true);
+    setBooksError("");
+
+    const unsub = onSnapshot(
+      collection(db, "livres"),
+      (snap) => {
+        const rows = snap.docs.map((d) => {
+          const data = d.data();
+
+          // 🔥 Chez toi: titre (pas title)
+          const titre = (data.titre ?? "").toString();
+
+          // Si tu n'as pas isbn/code dans Firestore, on utilise l'id du doc comme identifiant
+          const isbn = (data.isbn ?? data.ISBN ?? d.id ?? "").toString();
+
+          const course = (data.cours ?? data.course ?? "").toString();
+          const stock = Number(data.stock ?? data.qte ?? data.quantite ?? 0);
+          const price = data.prix ?? data.price ?? null;
+
+          return {
+            id: d.id,
+            isbn,
+            title: titre,     // on normalise côté front pour garder le reste du code
+            course,
+            stock: Number.isFinite(stock) ? stock : 0,
+            price,
+          };
+        });
+
+        setBooksRaw(rows);
+        setLoadingBooks(false);
+      },
+      (err) => {
+        console.error(err);
+        setBooksError("Impossible de charger les livres depuis Firestore.");
+        setLoadingBooks(false);
+      }
+    );
+
+    return () => unsub();
+  }, []);
 
   // reset page quand query/sort change
   useEffect(() => {
@@ -40,7 +82,7 @@ export default function HomePage() {
     if (!isSearching) return [];
     const nq = normalize(q);
 
-    return MOCK_BOOKS
+    return booksRaw
       .filter((b) => {
         const t = normalize(b.title);
         const i = normalize(b.isbn);
@@ -48,11 +90,10 @@ export default function HomePage() {
         return t.includes(nq) || i.includes(nq) || c.includes(nq);
       })
       .map((b) => ({ ...b, status: computeStatus(b.stock) }));
-  }, [q, isSearching]);
+  }, [q, isSearching, booksRaw]);
 
   const sorted = useMemo(() => {
     if (!isSearching) return [];
-
     const arr = [...filtered];
 
     if (sortKey === "title_asc") {
@@ -66,12 +107,10 @@ export default function HomePage() {
     }
 
     if (sortKey === "availability") {
-      // Dispo -> Stock faible -> Rupture, puis stock desc
-      arr.sort((a, b) => (a.status.rank - b.status.rank) || ((b.stock ?? 0) - (a.stock ?? 0)));
+      arr.sort((a, b) => a.status.rank - b.status.rank || (b.stock ?? 0) - (a.stock ?? 0));
       return arr;
     }
 
-    // relevance (simple): match dans titre d'abord, puis stock desc
     const nq = normalize(q);
     arr.sort((a, b) => {
       const aInTitle = normalize(a.title).includes(nq) ? 1 : 0;
@@ -98,13 +137,7 @@ export default function HomePage() {
       <header className="topbar">
         <div className="topbar-inner topbar-row">
           <SearchBar value={query} onChange={setQuery} />
-
-          <select
-            className="sortSelect"
-            value={sortKey}
-            onChange={(e) => setSortKey(e.target.value)}
-            aria-label="Trier"
-          >
+          <select className="sortSelect" value={sortKey} onChange={(e) => setSortKey(e.target.value)}>
             <option value="relevance">Tri : Pertinence</option>
             <option value="availability">Tri : Disponibilité</option>
             <option value="title_asc">Tri : Titre (A → Z)</option>
@@ -119,19 +152,28 @@ export default function HomePage() {
             <div className="hero-inner">
               <h1 className="hero-title">Availo</h1>
               <p className="hero-subtitle">Vérifiez la disponibilité des livres de la COOP</p>
+
+              {loadingBooks && <p className="hero-subtitle" style={{ marginTop: 12 }}>Chargement de l’inventaire…</p>}
+              {booksError && <p className="hero-subtitle" style={{ marginTop: 12 }}>{booksError}</p>}
             </div>
           </section>
         ) : (
           <section className="results">
-            <BookList
-              books={paged}
-              total={total}
-              page={safePage}
-              totalPages={totalPages}
-              onPrev={() => setPage((p) => Math.max(1, p - 1))}
-              onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
-              onGo={(p) => setPage(p)}
-            />
+            {loadingBooks ? (
+              <div className="empty">Chargement…</div>
+            ) : booksError ? (
+              <div className="empty">{booksError}</div>
+            ) : (
+              <BookList
+                books={paged}
+                total={total}
+                page={safePage}
+                totalPages={totalPages}
+                onPrev={() => setPage((p) => Math.max(1, p - 1))}
+                onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+                onGo={(p) => setPage(p)}
+              />
+            )}
           </section>
         )}
       </main>

@@ -4,7 +4,6 @@ import { useState } from "react";
 export default function BookCard({ book }) {
   const [imgOk, setImgOk] = useState(true);
 
-  // Option simple: cover via OpenLibrary (si dispo). Sinon fallback.
   const coverUrl = `https://covers.openlibrary.org/b/isbn/${book.isbn}-M.jpg`;
 
   return (
@@ -26,9 +25,14 @@ export default function BookCard({ book }) {
         </div>
 
         <div className="cardBody">
-          <div className="titleRow">
-            <div className="bookTitle" title={book.title}>{book.title}</div>
+          {/* ✅ Badge dispo sur sa propre ligne */}
+          <div className="statusRow">
             <span className={`pill ${book.status.tag}`}>{book.status.label}</span>
+          </div>
+
+          {/* ✅ Titre en dessous, pleine largeur */}
+          <div className="bookTitle" title={book.title}>
+            {book.title}
           </div>
 
           <div className="meta">
