@@ -27,9 +27,9 @@ export default function HomePage() {
   const [booksError, setBooksError] = useState("");
 
   const q = query.trim();
-  const isSearching = q.length > 0;
+  const hasQuery = q.length > 0;
 
-  // ✅ Temps réel (tu ré-importes Excel → ça se met à jour direct)
+  // ✅ Temps réel (import Excel → update direct)
   useEffect(() => {
     setLoadingBooks(true);
     setBooksError("");
@@ -40,10 +40,7 @@ export default function HomePage() {
         const rows = snap.docs.map((d) => {
           const data = d.data();
 
-          // 🔥 Chez toi: titre (pas title)
           const titre = (data.titre ?? "").toString();
-
-          // Si tu n'as pas isbn/code dans Firestore, on utilise l'id du doc comme identifiant
           const isbn = (data.isbn ?? data.ISBN ?? d.id ?? "").toString();
 
           const course = (data.cours ?? data.course ?? "").toString();
@@ -53,7 +50,7 @@ export default function HomePage() {
           return {
             id: d.id,
             isbn,
-            title: titre,     // on normalise côté front pour garder le reste du code
+            title: titre,
             course,
             stock: Number.isFinite(stock) ? stock : 0,
             price,
@@ -78,22 +75,25 @@ export default function HomePage() {
     setPage(1);
   }, [q, sortKey]);
 
-  const filtered = useMemo(() => {
-    if (!isSearching) return [];
-    const nq = normalize(q);
+  const allWithStatus = useMemo(() => {
+    return booksRaw.map((b) => ({ ...b, status: computeStatus(b.stock) }));
+  }, [booksRaw]);
 
-    return booksRaw
-      .filter((b) => {
-        const t = normalize(b.title);
-        const i = normalize(b.isbn);
-        const c = normalize(b.course);
-        return t.includes(nq) || i.includes(nq) || c.includes(nq);
-      })
-      .map((b) => ({ ...b, status: computeStatus(b.stock) }));
-  }, [q, isSearching, booksRaw]);
+  // ✅ Si pas de recherche → on renvoie TOUS les livres
+  // ✅ Si recherche → on filtre
+  const filtered = useMemo(() => {
+    if (!hasQuery) return allWithStatus;
+
+    const nq = normalize(q);
+    return allWithStatus.filter((b) => {
+      const t = normalize(b.title);
+      const i = normalize(b.isbn);
+      const c = normalize(b.course);
+      return t.includes(nq) || i.includes(nq) || c.includes(nq);
+    });
+  }, [allWithStatus, q, hasQuery]);
 
   const sorted = useMemo(() => {
-    if (!isSearching) return [];
     const arr = [...filtered];
 
     if (sortKey === "title_asc") {
@@ -111,6 +111,14 @@ export default function HomePage() {
       return arr;
     }
 
+    // sortKey === "relevance"
+    // ➜ si pas de recherche, "Pertinence" = tri dispo/stock (sinon ça veut rien dire)
+    if (!hasQuery) {
+      arr.sort((a, b) => a.status.rank - b.status.rank || (b.stock ?? 0) - (a.stock ?? 0));
+      return arr;
+    }
+
+    // ➜ si recherche, on garde ta logique de pertinence
     const nq = normalize(q);
     arr.sort((a, b) => {
       const aInTitle = normalize(a.title).includes(nq) ? 1 : 0;
@@ -120,17 +128,16 @@ export default function HomePage() {
     });
 
     return arr;
-  }, [filtered, sortKey, q, isSearching]);
+  }, [filtered, sortKey, q, hasQuery]);
 
   const total = sorted.length;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const safePage = Math.min(Math.max(1, page), totalPages);
 
   const paged = useMemo(() => {
-    if (!isSearching) return [];
     const start = (safePage - 1) * PAGE_SIZE;
     return sorted.slice(start, start + PAGE_SIZE);
-  }, [sorted, safePage, isSearching]);
+  }, [sorted, safePage]);
 
   return (
     <div className="page">
@@ -147,35 +154,45 @@ export default function HomePage() {
       </header>
 
       <main className="content">
-        {!isSearching ? (
-          <section className="hero">
-            <div className="hero-inner">
-              <h1 className="hero-title">Availo</h1>
-              <p className="hero-subtitle">Vérifiez la disponibilité des livres de la COOP</p>
+        {/* ✅ Hero en haut, et en scrollant il disparaît naturellement */}
+        <section className="hero">
+          <div className="hero-inner">
+            <h1 className="hero-title">Availo</h1>
+            <p className="hero-subtitle">Vérifiez la disponibilité des livres de la COOP</p>
 
-              {loadingBooks && <p className="hero-subtitle" style={{ marginTop: 12 }}>Chargement de l’inventaire…</p>}
-              {booksError && <p className="hero-subtitle" style={{ marginTop: 12 }}>{booksError}</p>}
-            </div>
-          </section>
-        ) : (
-          <section className="results">
-            {loadingBooks ? (
-              <div className="empty">Chargement…</div>
-            ) : booksError ? (
-              <div className="empty">{booksError}</div>
-            ) : (
-              <BookList
-                books={paged}
-                total={total}
-                page={safePage}
-                totalPages={totalPages}
-                onPrev={() => setPage((p) => Math.max(1, p - 1))}
-                onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
-                onGo={(p) => setPage(p)}
-              />
+            {loadingBooks && (
+              <p className="hero-subtitle" style={{ marginTop: 12 }}>
+                Chargement de l’inventaire…
+              </p>
             )}
-          </section>
-        )}
+            {booksError && (
+              <p className="hero-subtitle" style={{ marginTop: 12 }}>
+                {booksError}
+              </p>
+            )}
+
+
+          </div>
+        </section>
+
+        {/* ✅ Liste de TOUS les livres (ou filtrés si query) */}
+        <section className="results">
+          {loadingBooks ? (
+            <div className="empty">Chargement…</div>
+          ) : booksError ? (
+            <div className="empty">{booksError}</div>
+          ) : (
+            <BookList
+              books={paged}
+              total={total}
+              page={safePage}
+              totalPages={totalPages}
+              onPrev={() => setPage((p) => Math.max(1, p - 1))}
+              onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+              onGo={(p) => setPage(p)}
+            />
+          )}
+        </section>
       </main>
     </div>
   );
