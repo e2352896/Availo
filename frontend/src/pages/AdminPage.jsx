@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase/firebase.js";
 import * as XLSX from "xlsx";
-import { doc, writeBatch, serverTimestamp } from "firebase/firestore";
+import { doc, getDocs, deleteDoc, writeBatch, serverTimestamp } from "firebase/firestore";
 
 function pick(row, candidates) {
   const keys = Object.keys(row || {});
@@ -26,6 +26,10 @@ function normalizeRows(rows) {
       const titre = String(pick(r, ["titre", "title", "nom", "produit", "description"]) ?? "").trim();
       const cours = String(pick(r, ["cours", "course", "code cours", "code_cours"]) ?? "").trim();
 
+      const editeur = String(
+        pick(r, ["editeur", "éditeur", "publisher"]) ?? ""
+      ).trim();
+
       const stockRaw = pick(r, ["stock", "qte", "quantite", "quantité", "qty", "inventaire"]);
       const stock = toNumber(stockRaw, 0);
 
@@ -33,7 +37,7 @@ function normalizeRows(rows) {
       const prix = prixRaw === "" || prixRaw == null ? null : toNumber(prixRaw, null);
 
       if (!isbn || !titre) return null;
-      return { isbn, titre, cours, stock, prix };
+      return { isbn, titre, cours, editeur, stock, prix };
     })
     .filter(Boolean);
 }
@@ -96,6 +100,23 @@ export default function AdminPage() {
       let batch = writeBatch(db);
       let ops = 0;
 
+      const snap = await getDocs(collection(db, "livres"));
+      let delBatch = writeBatch(db);
+      let delOps = 0;
+
+      for (const d of snap.docs) {
+        delBatch.delete(d.ref);
+        delOps++;
+
+        if (delOps === 450) {
+          await delBatch.commit();
+          delBatch = writeBatch(db);
+          delOps = 0;
+        }
+      }
+
+      if (delOps > 0) await delBatch.commit();
+
       for (const b of books) {
         const ref = doc(collection(db, "livres"), b.isbn);
 
@@ -103,12 +124,11 @@ export default function AdminPage() {
           ref,
           {
             titre: b.titre,
-            cours: b.cours,
+            editeur: b.editeur ?? "",            
             stock: b.stock,
             prix: b.prix,
             updatedAt: serverTimestamp(),
           },
-          { merge: true }
         );
 
         ops++;

@@ -1,7 +1,42 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { collection, getDocs, query, where, limit } from "firebase/firestore";
 import { db } from "../firebase/firebase.js";
+
+function AutoFitTitleCover({ text, className = "" }) {
+  const boxRef = useRef(null);
+  const [fontSize, setFontSize] = useState(18);
+
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+
+    let size = 18;
+    box.style.fontSize = `${size}px`;
+
+    for (let i = 0; i < 16; i++) {
+      const tooTall = box.scrollHeight > box.clientHeight;
+      const tooWide = box.scrollWidth > box.clientWidth;
+      if (!tooTall && !tooWide) break;
+
+      size -= 1;
+      if (size < 10) break;
+      box.style.fontSize = `${size}px`;
+    }
+
+    setFontSize(size);
+  }, [text]);
+
+  return (
+    <div
+      ref={boxRef}
+      className={`detailsCoverFallback ${className}`}
+      style={{ fontSize }}
+    >
+      {text || "Sans titre"}
+    </div>
+  );
+}
 
 function computeStatus(stock) {
   const n = Number(stock ?? 0);
@@ -26,12 +61,16 @@ export default function BookDetailsPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [book, setBook] = useState(null);
-  const [imgOk, setImgOk] = useState(true);
 
-  const coverUrl = useMemo(
-    () => `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`,
+  const isbnClean = useMemo(
+    () => String(isbn || "").replace(/[^0-9Xx]/g, "").toUpperCase(),
     [isbn]
   );
+
+  const coverUrl = `https://covers.openlibrary.org/b/isbn/${isbnClean}-L.jpg?default=false`;
+  const [imgOk, setImgOk] = useState(true);
+
+  useEffect(() => setImgOk(true), [isbnClean]);
 
   useEffect(() => {
     let alive = true;
@@ -55,7 +94,7 @@ export default function BookDetailsPage() {
           const data = d.data();
 
           const titre = (data.titre ?? "").toString();
-          const cours = (data.cours ?? data.course ?? "").toString();
+          const editeur = (data.editeur ?? data.Editeur ?? data["Éditeur"] ?? "").toString();
           const stock = Number(data.stock ?? data.qte ?? data.quantite ?? 0);
           const prix = data.prix ?? data.price ?? null;
 
@@ -63,7 +102,7 @@ export default function BookDetailsPage() {
             id: d.id,
             isbn,
             title: titre || "(sans titre)",
-            course: cours,
+            editeur,
             stock: Number.isFinite(stock) ? stock : 0,
             price: prix,
           });
@@ -85,7 +124,7 @@ export default function BookDetailsPage() {
 
         const data = found.data();
         const titre = (data.titre ?? "").toString();
-        const cours = (data.cours ?? data.course ?? "").toString();
+        const editeur = (data.editeur ?? data.Editeur ?? data["Éditeur"] ?? "").toString();
         const stock = Number(data.stock ?? data.qte ?? data.quantite ?? 0);
         const prix = data.prix ?? data.price ?? null;
 
@@ -93,7 +132,7 @@ export default function BookDetailsPage() {
           id: found.id,
           isbn,
           title: titre || "(sans titre)",
-          course: cours,
+          editeur,
           stock: Number.isFinite(stock) ? stock : 0,
           price: prix,
         });
@@ -158,10 +197,15 @@ export default function BookDetailsPage() {
           <div className="detailsCard">
             <div className="detailsLeft">
               <div className="detailsCover">
-                {imgOk ? (
-                  <img src={coverUrl} alt={book.title} onError={() => setImgOk(false)} />
+                {imgOk && isbnClean ? (
+                  <img
+                    src={coverUrl}
+                    alt={book?.title || "Couverture"}
+                    onError={() => setImgOk(false)}
+                    loading="lazy"
+                  />
                 ) : (
-                  <div className="coverFallback"><span>AV</span></div>
+                  <AutoFitTitleCover text={book?.title} />
                 )}
               </div>
             </div>
@@ -174,14 +218,15 @@ export default function BookDetailsPage() {
               <h1 className="detailsTitle">{book.title}</h1>
 
               <div className="detailsMeta">
-                <div className="detailsMetaRow">
-                  <span className="detailsKey">Cours</span>
-                  <span className="detailsVal">{book.course || "—"}</span>
-                </div>
 
                 <div className="detailsMetaRow">
                   <span className="detailsKey">ISBN</span>
                   <span className="detailsVal">{book.isbn}</span>
+                </div>
+
+                <div className="detailsMetaRow">
+                  <span className="detailsKey">Éditeur</span>
+                  <span className="detailsVal">{book.editeur}</span>
                 </div>
 
                 <div className="detailsMetaRow">
