@@ -55,12 +55,53 @@ function money(v) {
   }
 }
 
+// ===== PUSH NOTIFS (PWA) =====
+const VAPID_PUBLIC_KEY =
+  "BG4aPMWv_ebFnn47HI6zjopH3epL1Jc10-MelLBJRiH9RsmCPv5IWVDQd52sX9K8zPNUnAw8RBT3dRp_erqIFOI";
+
+// URLs de tes functions
+const FN_SUBSCRIBE =
+  "https://us-central1-availo-162e8.cloudfunctions.net/subscribeBookAlert";
+const FN_UNSUBSCRIBE =
+  "https://us-central1-availo-162e8.cloudfunctions.net/unsubscribeBookAlert";
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+async function ensureServiceWorker() {
+  if (!("serviceWorker" in navigator)) throw new Error("SW not supported");
+  const reg = await navigator.serviceWorker.register("/sw.js");
+  await navigator.serviceWorker.ready;
+  return reg;
+}
+
+function getLocalAlerts() {
+  try {
+    return JSON.parse(localStorage.getItem("availo_alert_books") || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function setLocalAlerts(arr) {
+  localStorage.setItem("availo_alert_books", JSON.stringify(arr));
+}
+
 export default function BookDetailsPage() {
   const { isbn } = useParams();
 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [book, setBook] = useState(null);
+
+  const [alertBusy, setAlertBusy] = useState(false);
+  const [alertOn, setAlertOn] = useState(false);
 
   const isbnClean = useMemo(
     () => String(isbn || "").replace(/[^0-9Xx]/g, "").toUpperCase(),
@@ -81,9 +122,6 @@ export default function BookDetailsPage() {
       setBook(null);
 
       try {
-        // ✅ Cas 1: ton docId = ISBN (le meilleur scénario)
-        // -> on essaie d'abord une requête sur champ "isbn" (car tu m'as dit que parfois y'a juste "titre")
-        // Si tu n'as pas de champ isbn dans les docs, on va fallback à chercher par doc.id en parcourant.
         const qRef = query(collection(db, "livres"), where("isbn", "==", isbn), limit(1));
         const snap = await getDocs(qRef);
 
@@ -110,8 +148,6 @@ export default function BookDetailsPage() {
           return;
         }
 
-        // ✅ Fallback: si tu n'as PAS de champ "isbn" et que l'ISBN est le docId
-        // On parcourt (ok pour petit dataset, plus tard on optimisera)
         const allSnap = await getDocs(collection(db, "livres"));
         if (!alive) return;
 
@@ -150,6 +186,70 @@ export default function BookDetailsPage() {
       alive = false;
     };
   }, [isbn]);
+
+  // ✅ Etat local: est-ce que ce livre est déjà "suivi" ?
+  useEffect(() => {
+    if (!book?.id) return;
+    const list = getLocalAlerts();
+    setAlertOn(list.includes(book.id));
+  }, [book?.id]);
+
+  async function enableAlert() {
+    if (!book?.id) return;
+    setAlertBusy(true);
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") throw new Error("Permission refusée");
+
+      const reg = await ensureServiceWorker();
+
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+
+      await fetch(FN_SUBSCRIBE, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookId: book.id, subscription: sub.toJSON() }),
+      });
+
+      const list = Array.from(new Set([...getLocalAlerts(), book.id]));
+      setLocalAlerts(list);
+      setAlertOn(true);
+    } catch (e) {
+      console.error(e);
+      alert("Impossible d’activer les alertes (PWA push).");
+    } finally {
+      setAlertBusy(false);
+    }
+  }
+
+  async function disableAlert() {
+    if (!book?.id) return;
+    setAlertBusy(true);
+    try {
+      const reg = await ensureServiceWorker();
+      const sub = await reg.pushManager.getSubscription();
+
+      if (sub) {
+        await fetch(FN_UNSUBSCRIBE, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bookId: book.id, subscription: sub.toJSON() }),
+        });
+      }
+
+      const list = getLocalAlerts().filter((x) => x !== book.id);
+      setLocalAlerts(list);
+      setAlertOn(false);
+    } catch (e) {
+      console.error(e);
+      alert("Impossible de désactiver l’alerte.");
+    } finally {
+      setAlertBusy(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -218,7 +318,6 @@ export default function BookDetailsPage() {
               <h1 className="detailsTitle">{book.title}</h1>
 
               <div className="detailsMeta">
-
                 <div className="detailsMetaRow">
                   <span className="detailsKey">ISBN</span>
                   <span className="detailsVal">{book.isbn}</span>
@@ -240,7 +339,32 @@ export default function BookDetailsPage() {
                 </div>
               </div>
 
+              {/* ✅ BOUTON ALERTES */}
+              <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {!alertOn ? (
+                  <button
+                    className="btn"
+                    disabled={alertBusy || book.stock > 0}
+                    onClick={enableAlert}
+                    title={
+                      book.stock > 0
+                        ? "Le livre est déjà dispo"
+                        : "Recevoir une notif quand il redevient dispo"
+                    }
+                  >
+                    🔔 Ajouter aux alertes
+                  </button>
+                ) : (
+                  <button className="btn" disabled={alertBusy} onClick={disableAlert}>
+                    🔕 Retirer l’alerte
+                  </button>
+                )}
+              </div>
 
+              {/* Optionnel: petit texte d'aide */}
+              <div style={{ marginTop: 8, opacity: 0.75, fontSize: 13 }}>
+                Les alertes fonctionnent sur ce navigateur (sans compte). Si tu effaces les données du site, l’alerte disparaît.
+              </div>
             </div>
           </div>
         </div>

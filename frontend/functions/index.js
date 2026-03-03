@@ -1,5 +1,11 @@
 const admin = require("firebase-admin");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onRequest } = require("firebase-functions/v2/https");
+const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
+const cors = require("cors");
+const webpush = require("web-push");
+
+const corsHandler = cors({ origin: true });
 
 admin.initializeApp();
 
@@ -207,3 +213,152 @@ exports.deleteAdminAccount = onCall(async (request) => {
     throw mapAuthError(error, "Echec de suppression du compte.");
   }
 });
+
+// ---- VAPID KEYS ----
+// Tu vas les set avec firebase functions:config:set (plus bas)
+function getVapid() {
+  const publicKey = process.env.VAPID_PUBLIC_KEY;
+  const privateKey = process.env.VAPID_PRIVATE_KEY;
+
+  if (!publicKey || !privateKey) {
+    throw new Error("Missing VAPID env variables");
+  }
+
+  return { publicKey, privateKey };
+}
+
+function safeSubIdFromEndpoint(endpoint) {
+  // base64url simple
+  return Buffer.from(String(endpoint)).toString("base64url").slice(0, 500);
+}
+
+function normalizeStock(data) {
+  return Number(data?.stock ?? data?.qte ?? data?.quantite ?? 0) || 0;
+}
+
+// ✅ HTTP: subscribe
+exports.subscribeBookAlert = onRequest(async (req, res) => {
+  corsHandler(req, res, async () => {
+    try {
+      if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
+      const { bookId, subscription } = req.body || {};
+      if (!bookId || !subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+        return res.status(400).json({ error: "Invalid payload" });
+      }
+
+      const subId = safeSubIdFromEndpoint(subscription.endpoint);
+      const ref = db.collection("pushSubscriptions").doc(subId);
+
+      await ref.set(
+        {
+          endpoint: subscription.endpoint,
+          keys: {
+            p256dh: subscription.keys.p256dh,
+            auth: subscription.keys.auth,
+          },
+          books: admin.firestore.FieldValue.arrayUnion(String(bookId)),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ error: "Server error" });
+    }
+  });
+});
+
+// ✅ HTTP: unsubscribe
+exports.unsubscribeBookAlert = onRequest(async (req, res) => {
+  corsHandler(req, res, async () => {
+    try {
+      if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
+      const { bookId, subscription } = req.body || {};
+      if (!bookId || !subscription?.endpoint) {
+        return res.status(400).json({ error: "Invalid payload" });
+      }
+
+      const subId = safeSubIdFromEndpoint(subscription.endpoint);
+      const ref = db.collection("pushSubscriptions").doc(subId);
+
+      await ref.set(
+        {
+          books: admin.firestore.FieldValue.arrayRemove(String(bookId)),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ error: "Server error" });
+    }
+  });
+});
+
+// ✅ Trigger: si stock remonte au-dessus du seuil => push
+const ALERT_THRESHOLD = 0; // change à 2 si tu veux "dispo" seulement au-dessus de 2
+
+exports.onLivreStockUpdated = onDocumentUpdated(
+  {
+    document: "livres/{bookId}",
+    region: "us-central1",
+    secrets: ["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY"],
+  },
+  async (event) => {
+    try {
+      const before = event.data.before.data();
+      const after = event.data.after.data();
+
+      const oldStock = normalizeStock(before);
+      const newStock = normalizeStock(after);
+
+      if (!(oldStock <= ALERT_THRESHOLD && newStock > ALERT_THRESHOLD)) return;
+
+      const bookId = event.params.bookId;
+      const titre = String(after?.titre ?? "(Livre)");
+
+      const snap = await db
+        .collection("pushSubscriptions")
+        .where("books", "array-contains", String(bookId))
+        .get();
+
+      if (snap.empty) return;
+
+      const { publicKey, privateKey } = getVapid();
+      webpush.setVapidDetails("mailto:admin@availo.local", publicKey, privateKey);
+
+      const payload = JSON.stringify({
+        title: "Livre dispo ✅",
+        body: `${titre} est de nouveau disponible (stock: ${newStock}).`,
+        url: `/book/${bookId}`,
+      });
+
+      const sendPromises = snap.docs.map(async (d) => {
+        const sub = d.data();
+        const pushSub = { endpoint: sub.endpoint, keys: sub.keys };
+
+        try {
+          await webpush.sendNotification(pushSub, payload);
+        } catch (err) {
+          const code = err?.statusCode;
+          if (code === 404 || code === 410) {
+            await d.ref.delete();
+          } else {
+            console.error("Push send error:", err);
+          }
+        }
+      });
+
+      await Promise.allSettled(sendPromises);
+    } catch (e) {
+      console.error("onLivreStockUpdated error:", e);
+    }
+  }
+);
