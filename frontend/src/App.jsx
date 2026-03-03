@@ -3,7 +3,8 @@ import HomePage from "./pages/HomePage.jsx";
 import BookDetailsPage from "./pages/BookDetailsPage.jsx";
 import AdminLoginPage from "./pages/AdminLoginPage.jsx";
 import AdminPage from "./pages/AdminPage.jsx";
-import GestionPage from "./pages/AdminGestionPage.jsx"
+import GestionPage from "./pages/AdminGestionPage.jsx";
+import ProtectedRoute from "./components/ProtectedRoute.jsx";
 import "./App.css";
 
 export default function App() {
@@ -12,8 +13,22 @@ export default function App() {
       <Route path="/" element={<HomePage />} />
       <Route path="/books/:isbn" element={<BookDetailsPage />} />
       <Route path="/admin/login" element={<AdminLoginPage />} />
-      <Route path="/admin/gestion" element={<GestionPage />} />
-      <Route path="/admin" element={<AdminPage />} />
+      <Route
+        path="/admin/gestion"
+        element={
+          <ProtectedRoute>
+            <GestionPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute>
+            <AdminPage />
+          </ProtectedRoute>
+        }
+      />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

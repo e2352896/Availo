@@ -333,10 +333,18 @@ html, body {
 .adminPill {
   font-size: 12px;
   padding: 7px 10px;
+  min-height: 30px;
   border-radius: 999px;
   border: 1px solid var(--stroke);
   background: rgba(255,255,255,0.05);
   color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  cursor: pointer;
+  text-decoration: none;
+  appearance: none;
 }
 
 .dashHeader {

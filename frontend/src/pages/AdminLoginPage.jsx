@@ -1,6 +1,6 @@
-import { Link, useNavigate } from "react-router-dom";
-import { useState } from "react";
-import { signInWithEmailAndPassword } from "firebase/auth";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../firebase/firebase";
 
 export default function AdminLoginPage() {
@@ -9,6 +9,19 @@ export default function AdminLoginPage() {
   const [error, setError] = useState("");
 
   const navigate = useNavigate();
+  const location = useLocation();
+  const redirectTo = location.state?.from || "/admin";
+  const denied = Boolean(location.state?.denied);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        navigate(redirectTo, { replace: true });
+      }
+    });
+
+    return () => unsubscribe();
+  }, [navigate, redirectTo]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -18,7 +31,7 @@ export default function AdminLoginPage() {
       await signInWithEmailAndPassword(auth, email, password);
 
       // ✅ Redirection vers /admin
-      navigate("/admin");
+      navigate(redirectTo, { replace: true });
     } catch (err) {
       setError("Email ou mot de passe invalide.");
       console.error(err);
@@ -35,6 +48,12 @@ export default function AdminLoginPage() {
         </h1>
 
         <form onSubmit={handleSubmit} className="box">
+          {denied && !error && (
+            <div className="notification is-warning">
+              Acces refuse. Connecte-toi avec un compte admin.
+            </div>
+          )}
+
           {error && (
             <div className="notification is-danger">
               {error}

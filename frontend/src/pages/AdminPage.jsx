@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { signOut } from "firebase/auth";
 import { collection, onSnapshot } from "firebase/firestore";
-import { db } from "../firebase/firebase.js";
+import { auth, db } from "../firebase/firebase.js";
 import * as XLSX from "xlsx";
 import { doc, getDocs, deleteDoc, writeBatch, serverTimestamp } from "firebase/firestore";
 
@@ -72,12 +73,22 @@ function StatCard({ label, value, hint, tone = "default" }) {
 }
 
 export default function AdminPage() {
+  const navigate = useNavigate();
   const [books, setBooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState("");
+
+  async function handleLogout() {
+    try {
+      await signOut(auth);
+      navigate("/admin/login", { replace: true });
+    } catch (e) {
+      console.error(e);
+    }
+  }
 
   async function handleExcelUpload(file) {
     setImportMsg("");
@@ -240,9 +251,14 @@ export default function AdminPage() {
           </div>
 
           {/* ✅ MODIFICATION ICI */}
-          <Link to="/admin/gestion" className="adminPill" style={{ textDecoration: "none" }}>
-            Gestion
-          </Link>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Link to="/admin/gestion" className="adminPill" style={{ textDecoration: "none" }}>
+              Gestion
+            </Link>
+            <button type="button" className="adminPill" onClick={handleLogout}>
+              Deconnexion
+            </button>
+          </div>
         </div>
       </header>
 
