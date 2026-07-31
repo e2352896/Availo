@@ -1,8 +1,9 @@
+/* global importScripts, firebase, clients */
 importScripts("https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js");
 importScripts("https://www.gstatic.com/firebasejs/10.12.5/firebase-messaging-compat.js");
 
 firebase.initializeApp({
-  apiKey: "AIzaSyCaFseDoKFwMzU2rnBUgvlbnGlsbA-6rjY",
+  apiKey: "__FIREBASE_API_KEY__",
   authDomain: "availo-162e8.firebaseapp.com",
   projectId: "availo-162e8",
   storageBucket: "availo-162e8.firebasestorage.app",

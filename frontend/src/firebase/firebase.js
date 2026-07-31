@@ -4,9 +4,19 @@ import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getFunctions } from "firebase/functions";
 
+const firebaseApiKey =
+  import.meta.env.VITE_FIREBASE_API_KEY ||
+  import.meta.env.REACT_APP_FIREBASE_API_KEY;
+
+if (!firebaseApiKey) {
+  console.error(
+    "Missing Firebase API key. Add VITE_FIREBASE_API_KEY or REACT_APP_FIREBASE_API_KEY to the project .env file."
+  );
+}
+
 // Your web app's Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyCaFseDoKFwMzU2rnBUgvlbnGlsbA-6rjY",
+  apiKey: firebaseApiKey,
   authDomain: "availo-162e8.firebaseapp.com",
   projectId: "availo-162e8",
   storageBucket: "availo-162e8.firebasestorage.app",
